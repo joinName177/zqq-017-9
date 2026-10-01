@@ -1,4 +1,4 @@
-import { dashboardStore, DashboardState } from './app/state/dashboard-store.js';
+import { dashboardStore, DashboardState, getTodayDateString } from './app/state/dashboard-store.js';
 import { dashboardController } from './app/controllers/dashboard-controller.js';
 import { renderGauge } from './components/gauge.js';
 import { renderRadar } from './components/radar.js';
@@ -8,13 +8,26 @@ import { renderLeaderboard } from './components/leaderboard.js';
 import { renderMetricsCards, renderAttributionList } from './components/metrics-cards.js';
 import { renderAssessmentModal } from './components/assessment-modal.js';
 import { renderHistoryModal } from './components/history-modal.js';
+import { renderSyncStatusBar } from './components/sync-status-bar.js';
+import { renderConflictModal } from './components/conflict-modal.js';
+import { projectView } from './app/services/local-view-projection.js';
+import { syncService } from './app/services/sync-service.js';
 import { DimensionKey } from './core/index.js';
 
 function renderApp(state: DashboardState): void {
   const app = document.getElementById('app');
   if (!app) return;
 
-  const { dashboard, loading, error, isOffline, cachedAt } = state;
+  const { loading, error, isOffline, cachedAt, syncQueue, isSyncing, syncMessage, activeConflict } = state;
+
+  // 用本地队列叠加投影，得到待同步标记（冲突弹窗的本地版本也由此计算）
+  const projectedView = projectView(
+    state.rawDashboard,
+    state.rawHistory,
+    syncQueue,
+    getTodayDateString()
+  );
+  const pendingDateCount = new Set(syncQueue.map((i) => i.date)).size;
 
   // Header HTML
   const headerHtml = `
@@ -40,6 +53,7 @@ function renderApp(state: DashboardState): void {
 
       <div class="header-actions">
         ${isOffline ? `<span class="badge badge-offline">⚠️ 离线缓存 (${cachedAt ? cachedAt.slice(11, 16) : ''})</span>` : ''}
+        ${pendingDateCount > 0 ? `<span class="badge badge-pending" title="有记录保存在本机，等待联网补交">🕓 ${syncQueue.length} 条待同步</span>` : ''}
         ${loading ? `<span style="font-size: 0.8rem; color: var(--text-muted);">同步中...</span>` : ''}
         <button id="btn-seed-data" class="btn btn-secondary btn-sm" title="注入14天完整演化演示数据">
           ✨ 演示数据
@@ -54,11 +68,19 @@ function renderApp(state: DashboardState): void {
     </header>
   `;
 
+  const syncBarHtml = renderSyncStatusBar({
+    isOffline,
+    isSyncing,
+    queue: syncQueue,
+    message: syncMessage,
+  });
+
   // Fallback if no dashboard data yet
-  if (!dashboard) {
+  if (!projectedView.dashboard) {
     app.innerHTML = `
       <div class="app-container">
         ${headerHtml}
+        ${syncBarHtml}
         <main class="main-content" style="text-align: center; padding-top: 5rem;">
           ${loading ? '<div style="font-size: 1.25rem; color: var(--entropy-low);">正在加载热力学仪表盘...</div>' : ''}
           ${error ? `<div style="color: var(--entropy-high); margin-bottom: 1rem;">${error}</div><button id="btn-retry" class="btn btn-primary">重试连接</button>` : ''}
@@ -70,7 +92,8 @@ function renderApp(state: DashboardState): void {
     return;
   }
 
-  const { todayEntry, todayCalculation, attribution, crisisReport, trendReport, leaderboard, riverData } = dashboard;
+  const projectedDashboard = projectedView.dashboard;
+  const { todayEntry, todayCalculation, attribution, crisisReport, trendReport, leaderboard, riverData } = projectedDashboard;
 
   // Crisis Banner HTML
   const crisisHtml = renderCrisisBanner({ report: crisisReport });
@@ -120,13 +143,37 @@ function renderApp(state: DashboardState): void {
 
   const historyModalHtml = renderHistoryModal({
     isOpen: state.isHistoryModalOpen,
-    entries: state.historyList,
+    entries: projectedView.history.map((entry) => ({ entry, syncStatus: entry.syncStatus })),
+    pendingDeleteDates: projectedView.tombstoneDates,
   });
+
+  // 冲突弹窗中展示的本地版本：把队列中该日期在冲突项（含）之前的操作叠加出来
+  let conflictLocalEntry = null;
+  if (activeConflict && activeConflict.kind === 'entry-create') {
+    conflictLocalEntry = projectedView.dashboard.todayEntry;
+    if (!conflictLocalEntry || conflictLocalEntry.date !== activeConflict.date) {
+      conflictLocalEntry = projectedView.history.find((e) => e.date === activeConflict.date) || null;
+    }
+  }
+  const conflictModalHtml = renderConflictModal({
+    conflict: activeConflict,
+    localEntry: conflictLocalEntry,
+  });
+
+  // 今日条目若有待同步操作，在日期徽标旁明确标出
+  const todaySyncBadge = todayEntry
+    ? (projectedView.statusByDate[todayEntry.date] === 'pending-create'
+        ? '<span class="badge badge-pending" style="font-size: 0.7rem;">待同步·新建</span>'
+        : projectedView.statusByDate[todayEntry.date] === 'pending-update'
+          ? '<span class="badge badge-pending" style="font-size: 0.7rem;">待同步·更新</span>'
+          : '')
+    : '';
 
   // Complete Assembly
   app.innerHTML = `
     <div class="app-container">
       ${headerHtml}
+      ${syncBarHtml}
 
       <main class="main-content">
         <!-- Crisis Alert Banner -->
@@ -141,8 +188,11 @@ function renderApp(state: DashboardState): void {
                 <span>🌡️</span>
                 <span>热力学熵值表盘</span>
               </div>
-              <span class="badge ${todayEntry && todayEntry.netEntropy > 75 ? 'badge-high' : todayEntry && todayEntry.netEntropy < 30 ? 'badge-low' : 'badge-mid'}">
-                ${todayEntry ? todayEntry.date : '未记录'}
+              <span style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                <span class="badge ${todayEntry && todayEntry.netEntropy > 75 ? 'badge-high' : todayEntry && todayEntry.netEntropy < 30 ? 'badge-low' : 'badge-mid'}">
+                  ${todayEntry ? todayEntry.date : '未记录'}
+                </span>
+                ${todaySyncBadge}
               </span>
             </div>
             ${gaugeHtml}
@@ -240,6 +290,7 @@ function renderApp(state: DashboardState): void {
       <!-- Modals -->
       ${assessmentModalHtml}
       ${historyModalHtml}
+      ${conflictModalHtml}
     </div>
   `;
 
@@ -375,10 +426,39 @@ function attachEventHandlers(): void {
   deleteBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-id');
-      if (id) {
-        dashboardController.deleteEntry(id);
+      const date = btn.getAttribute('data-date');
+      if (id && date) {
+        dashboardController.deleteEntry(id, date);
       }
     });
+  });
+
+  // Sync status bar actions
+  document.getElementById('btn-flush-queue')?.addEventListener('click', () => {
+    dashboardController.flushQueue();
+  });
+  document.querySelectorAll<HTMLButtonElement>('.btn-discard-queue').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      if (id) dashboardController.discardQueuedItem(id);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>('.btn-retry-queue').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      if (id) dashboardController.retryQueuedItem(id);
+    });
+  });
+
+  // Conflict modal actions
+  document.getElementById('btn-conflict-local')?.addEventListener('click', () => {
+    dashboardStore.resolveConflict({ resolution: 'use-local' });
+  });
+  document.getElementById('btn-conflict-server')?.addEventListener('click', () => {
+    dashboardStore.resolveConflict({ resolution: 'use-server' });
+  });
+  document.getElementById('btn-conflict-cancel')?.addEventListener('click', () => {
+    dashboardStore.resolveConflict({ resolution: 'cancel' });
   });
 
   // River Chart Tooltip Hover Handlers
@@ -422,5 +502,22 @@ dashboardStore.subscribe((state) => {
   renderApp(state);
 });
 
+// 同步引擎遇到冲突时，通过 store 的 Promise 等待用户在弹窗中裁决
+syncService.setResolver(async (conflict) => dashboardStore.awaitConflictDecision(conflict));
+
+// 联网恢复后自动补交；从后台标签页切回时也检查一次（online 事件在某些场景会丢）
+window.addEventListener('online', () => {
+  dashboardStore.setState({ isOffline: false });
+  void dashboardController.flushQueue();
+});
+window.addEventListener('offline', () => {
+  dashboardStore.setState({ isOffline: true });
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && navigator.onLine) {
+    void dashboardController.flushQueue();
+  }
+});
+
 // Initial boot
-dashboardController.loadDashboard();
+void dashboardController.loadDashboard();
