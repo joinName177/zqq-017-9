@@ -1,0 +1,22 @@
+{
+  "name": "zqq-017-anxiety-entropy-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Anxiety Entropy Meter - Full Stack Thermodynamic Anxiety Tracking Platform",
+  "scripts": {
+    "build": "pnpm -r --filter=@anxiety-entropy/shared build && pnpm -r --filter=@anxiety-entropy/backend build && pnpm -r --filter=@anxiety-entropy/frontend build",
+    "test": "pnpm -r test",
+    "test:backend": "pnpm --filter=@anxiety-entropy/backend test",
+    "dev:backend": "pnpm --filter=@anxiety-entropy/backend dev",
+    "dev:frontend": "pnpm --filter=@anxiety-entropy/frontend dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 15px var(--entropy-low-glow);
+  }
+  50% {
+    box-shadow: 0 0 25px var(--entropy-low);
+  }
+}
+
+@keyframes pulse-crisis {
+  0%, 100% {
+    box-shadow: 0 0 20px var(--entropy-high-glow);
+    border-color: rgba(255, 8, 68, 0.8);
+  }
+  50% {
+    box-shadow: 0 0 35px var(--entropy-high);
+    border-color: rgba(255, 120, 140, 1);
+  }
+}
+
+@keyframes float-wave {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes scanline {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 100%;
+  }
+}
+
+.animate-crisis {
+  animation: pulse-crisis 2s infinite ease-in-out;
+}
+
+.animate-pulse {
+  animation: pulse-glow 3s infinite ease-in-out;
+}
+
+.animate-float {
+  animation: float-wave 4s infinite ease-in-out;
+}

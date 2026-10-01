@@ -1,0 +1,55 @@
+:root {
+  /* Thermodynamic Dark Palette */
+  --bg-primary: #0a0d14;
+  --bg-secondary: #101522;
+  --bg-card: rgba(18, 24, 38, 0.75);
+  --bg-card-hover: rgba(26, 35, 54, 0.85);
+  --bg-overlay: rgba(5, 8, 14, 0.85);
+
+  /* Thermodynamic Gradient Spectrum */
+  /* Low Entropy (Clarity & Serenity): Cold Celestial Cyan */
+  --entropy-low: #00f2fe;
+  --entropy-low-glow: rgba(0, 242, 254, 0.35);
+  --entropy-low-dark: #0984e3;
+
+  /* Mid Entropy (Dynamic Equilibrium): Amber Sun */
+  --entropy-mid: #f39c12;
+  --entropy-mid-glow: rgba(243, 156, 18, 0.35);
+  --entropy-mid-dark: #d35400;
+
+  /* High Entropy (Crisis & Chaos): Plasma Magma Crimson */
+  --entropy-high: #ff0844;
+  --entropy-high-glow: rgba(255, 8, 68, 0.45);
+  --entropy-high-dark: #c0392b;
+
+  /* Negentropy (Cooling & Healing): Emerald Leaf */
+  --negentropy-color: #00e676;
+  --negentropy-glow: rgba(0, 230, 118, 0.35);
+
+  /* Text Colors */
+  --text-primary: #f0f4f8;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-highlight: #ffffff;
+
+  /* Borders & Dividers */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-focus: rgba(0, 242, 254, 0.5);
+  --border-danger: rgba(255, 8, 68, 0.6);
+
+  /* Shadows */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.8);
+  --shadow-glow: 0 0 20px var(--entropy-low-glow);
+
+  /* Layout & Sizing */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  --max-width: 1400px;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
