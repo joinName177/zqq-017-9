@@ -41,6 +41,10 @@ export interface NegentropyEvent {
   reductionValue: number;
   notes?: string;
   createdAt: string;
+  /** 客户端生成的幂等键，避免断网重试导致同一负熵事件重复入账 */
+  clientEventId?: string;
+  /** 仅前端本地投影使用 */
+  syncStatus?: 'pending' | 'syncing' | 'conflict' | 'error';
 }
 
 export interface NegentropyLeaderboardItem {

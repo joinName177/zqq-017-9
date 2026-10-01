@@ -6,6 +6,7 @@ import {
   createEntrySchema,
   paginationQuerySchema,
   DailyEntry,
+  EntryVersionConflictError,
 } from '../../../core/index.js';
 
 export async function entryRoutes(
@@ -26,6 +27,13 @@ export async function entryRoutes(
       };
       return reply.status(201).send(response);
     } catch (err: unknown) {
+      if (err instanceof EntryVersionConflictError) {
+        return reply.status(409).send({
+          success: false,
+          error: err.message,
+          data: err.serverEntry,
+        });
+      }
       if (err instanceof ZodError) {
         return reply.status(400).send({
           success: false,
@@ -94,8 +102,13 @@ export async function entryRoutes(
   // 删除单条记录
   fastify.delete('/api/entries/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
+    const query = req.query as { baseVersion?: string; force?: string };
+    const baseVersion = Object.prototype.hasOwnProperty.call(query, 'baseVersion')
+      ? query.baseVersion === '' || query.baseVersion === undefined ? null : Number(query.baseVersion)
+      : undefined;
+    const force = query.force === 'true';
     try {
-      const deleted = await dailyEntryService.deleteEntryById(id);
+      const deleted = await dailyEntryService.deleteEntryById(id, baseVersion, force);
       if (!deleted) {
         return reply.status(404).send({
           success: false,
@@ -107,6 +120,13 @@ export async function entryRoutes(
         message: '评估记录删除成功',
       });
     } catch (err: unknown) {
+      if (err instanceof EntryVersionConflictError) {
+        return reply.status(409).send({
+          success: false,
+          error: err.message,
+          data: err.serverEntry,
+        });
+      }
       const message = err instanceof Error ? err.message : '删除记录失败';
       fastify.log.error(err);
       return reply.status(500).send({

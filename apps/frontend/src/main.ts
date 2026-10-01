@@ -8,13 +8,14 @@ import { renderLeaderboard } from './components/leaderboard.js';
 import { renderMetricsCards, renderAttributionList } from './components/metrics-cards.js';
 import { renderAssessmentModal } from './components/assessment-modal.js';
 import { renderHistoryModal } from './components/history-modal.js';
+import { renderSyncPanel } from './components/sync-panel.js';
 import { DimensionKey } from './core/index.js';
 
 function renderApp(state: DashboardState): void {
   const app = document.getElementById('app');
   if (!app) return;
 
-  const { dashboard, loading, error, isOffline, cachedAt } = state;
+  const { dashboard, loading, error, isOffline, cachedAt, syncQueue, isSyncingQueue } = state;
 
   // Header HTML
   const headerHtml = `
@@ -40,6 +41,7 @@ function renderApp(state: DashboardState): void {
 
       <div class="header-actions">
         ${isOffline ? `<span class="badge badge-offline">⚠️ 离线缓存 (${cachedAt ? cachedAt.slice(11, 16) : ''})</span>` : ''}
+        ${syncQueue.length > 0 ? `<span class="badge ${syncQueue.some((item) => item.status === 'conflict') ? 'badge-high' : 'badge-mid'}">📮 ${syncQueue.length} 项待同步</span>` : ''}
         ${loading ? `<span style="font-size: 0.8rem; color: var(--text-muted);">同步中...</span>` : ''}
         <button id="btn-seed-data" class="btn btn-secondary btn-sm" title="注入14天完整演化演示数据">
           ✨ 演示数据
@@ -71,6 +73,9 @@ function renderApp(state: DashboardState): void {
   }
 
   const { todayEntry, todayCalculation, attribution, crisisReport, trendReport, leaderboard, riverData } = dashboard;
+
+  // Sync Queue HTML
+  const syncPanelHtml = renderSyncPanel({ items: syncQueue, isSyncing: isSyncingQueue });
 
   // Crisis Banner HTML
   const crisisHtml = renderCrisisBanner({ report: crisisReport });
@@ -129,6 +134,9 @@ function renderApp(state: DashboardState): void {
       ${headerHtml}
 
       <main class="main-content">
+        <!-- Offline submission queue -->
+        ${syncPanelHtml}
+
         <!-- Crisis Alert Banner -->
         ${crisisHtml}
 
@@ -381,6 +389,44 @@ function attachEventHandlers(): void {
     });
   });
 
+  // Delete negentropy event buttons
+  const deleteNegBtns = document.querySelectorAll<HTMLButtonElement>('.btn-delete-negentropy');
+  deleteNegBtns.forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const eventId = btn.getAttribute('data-event-id');
+      if (eventId) dashboardController.deleteNegentropy(eventId);
+    });
+  });
+
+  // Sync queue controls
+  document.getElementById('btn-sync-now')?.addEventListener('click', () => {
+    dashboardController.syncQueue();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('.btn-conflict-keep-local').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      const item = id ? dashboardStore.getState().syncQueue.find((candidate) => candidate.id === id) : null;
+      if (item) dashboardController.resolveQueueConflict(item, 'local');
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('.btn-conflict-keep-server').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      const item = id ? dashboardStore.getState().syncQueue.find((candidate) => candidate.id === id) : null;
+      if (item) dashboardController.resolveQueueConflict(item, 'server');
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('.btn-discard-queue').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      if (id) dashboardController.discardQueuedItem(id);
+    });
+  });
+
   // River Chart Tooltip Hover Handlers
   const nodes = document.querySelectorAll<SVGGElement>('.river-node');
   const tooltip = document.getElementById('river-tooltip');
@@ -424,3 +470,4 @@ dashboardStore.subscribe((state) => {
 
 // Initial boot
 dashboardController.loadDashboard();
+dashboardController.loadHistory();

@@ -22,6 +22,7 @@ interface DailyEntryRow {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  version: number;
 }
 
 interface NegentropyEventRow {
@@ -32,6 +33,7 @@ interface NegentropyEventRow {
   reduction_value: number;
   notes: string | null;
   created_at: string;
+  client_event_id: string | null;
 }
 
 export class SqliteEntryRepository implements IEntryRepository {
@@ -56,6 +58,7 @@ export class SqliteEntryRepository implements IEntryRepository {
       negentropyEvents: events,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      version: row.version,
     };
   }
 
@@ -68,6 +71,7 @@ export class SqliteEntryRepository implements IEntryRepository {
       reductionValue: row.reduction_value,
       notes: row.notes ?? undefined,
       createdAt: row.created_at,
+      clientEventId: row.client_event_id ?? undefined,
     };
   }
 
@@ -79,12 +83,12 @@ export class SqliteEntryRepository implements IEntryRepository {
           id, date, physical_tension, rumination, lack_of_control,
           time_pressure, social_avoidance, future_uncertainty,
           gross_entropy, net_entropy, total_reduction, notes,
-          created_at, updated_at
+          created_at, updated_at, version
         ) VALUES (
           @id, @date, @physical_tension, @rumination, @lack_of_control,
           @time_pressure, @social_avoidance, @future_uncertainty,
           @gross_entropy, @net_entropy, @total_reduction, @notes,
-          @created_at, @updated_at
+          @created_at, @updated_at, @version
         )
         ON CONFLICT(date) DO UPDATE SET
           physical_tension = excluded.physical_tension,
@@ -97,7 +101,8 @@ export class SqliteEntryRepository implements IEntryRepository {
           net_entropy = excluded.net_entropy,
           total_reduction = excluded.total_reduction,
           notes = excluded.notes,
-          updated_at = excluded.updated_at
+          updated_at = excluded.updated_at,
+          version = excluded.version
       `);
 
       stmt.run({
@@ -115,15 +120,16 @@ export class SqliteEntryRepository implements IEntryRepository {
         notes: entry.notes ?? null,
         created_at: entry.createdAt,
         updated_at: entry.updatedAt,
+        version: entry.version,
       });
 
       // If entry has existing events to insert
       if (entry.negentropyEvents && entry.negentropyEvents.length > 0) {
         const eventStmt = this.db.prepare(`
           INSERT OR IGNORE INTO negentropy_events (
-            id, entry_id, title, category, reduction_value, notes, created_at
+            id, entry_id, title, category, reduction_value, notes, created_at, client_event_id
           ) VALUES (
-            @id, @entry_id, @title, @category, @reduction_value, @notes, @created_at
+            @id, @entry_id, @title, @category, @reduction_value, @notes, @created_at, @client_event_id
           )
         `);
 
@@ -136,6 +142,7 @@ export class SqliteEntryRepository implements IEntryRepository {
             reduction_value: evt.reductionValue,
             notes: evt.notes ?? null,
             created_at: evt.createdAt,
+            client_event_id: evt.clientEventId ?? null,
           });
         }
       }
@@ -160,6 +167,25 @@ export class SqliteEntryRepository implements IEntryRepository {
 
     const events = eventRows.map((e) => this.mapRowToEvent(e));
     return this.mapRowToEntry(row, events);
+  }
+
+  public async findByNegentropyEventId(eventId: string): Promise<DailyEntry | null> {
+    const row = this.db
+      .prepare(`
+        SELECT e.*
+        FROM daily_entries e
+        INNER JOIN negentropy_events n ON n.entry_id = e.id
+        WHERE n.id = ?
+      `)
+      .get(eventId) as DailyEntryRow | undefined;
+
+    if (!row) return null;
+
+    const eventRows = this.db
+      .prepare('SELECT * FROM negentropy_events WHERE entry_id = ? ORDER BY created_at ASC')
+      .all(row.id) as NegentropyEventRow[];
+
+    return this.mapRowToEntry(row, eventRows.map((eventRow) => this.mapRowToEvent(eventRow)));
   }
 
   public async findByDate(date: string): Promise<DailyEntry | null> {
@@ -233,7 +259,14 @@ export class SqliteEntryRepository implements IEntryRepository {
     return rows.map((r) => this.mapRowToEntry(r, eventsByEntryId.get(r.id) || []));
   }
 
-  public async deleteById(id: string): Promise<boolean> {
+  public async deleteById(id: string, expectedVersion?: number | null): Promise<boolean> {
+    if (expectedVersion !== undefined) {
+      const info = this.db
+        .prepare('DELETE FROM daily_entries WHERE id = ? AND version = ?')
+        .run(id, expectedVersion);
+      return info.changes > 0;
+    }
+
     const info = this.db.prepare('DELETE FROM daily_entries WHERE id = ?').run(id);
     return info.changes > 0;
   }
@@ -244,13 +277,22 @@ export class SqliteEntryRepository implements IEntryRepository {
   }
 
   public async addNegentropyEvent(event: NegentropyEvent): Promise<NegentropyEvent> {
+    if (event.clientEventId) {
+      const duplicateRow = this.db
+        .prepare('SELECT * FROM negentropy_events WHERE client_event_id = ?')
+        .get(event.clientEventId) as NegentropyEventRow | undefined;
+      if (duplicateRow) {
+        return this.mapRowToEvent(duplicateRow);
+      }
+    }
+
     const transaction = this.db.transaction(() => {
       this.db
         .prepare(`
           INSERT INTO negentropy_events (
-            id, entry_id, title, category, reduction_value, notes, created_at
+            id, entry_id, title, category, reduction_value, notes, created_at, client_event_id
           ) VALUES (
-            @id, @entry_id, @title, @category, @reduction_value, @notes, @created_at
+            @id, @entry_id, @title, @category, @reduction_value, @notes, @created_at, @client_event_id
           )
         `)
         .run({
@@ -261,6 +303,7 @@ export class SqliteEntryRepository implements IEntryRepository {
           reduction_value: event.reductionValue,
           notes: event.notes ?? null,
           created_at: event.createdAt,
+          client_event_id: event.clientEventId ?? null,
         });
 
       // Recalculate parent entry's total reduction and net entropy
@@ -276,7 +319,7 @@ export class SqliteEntryRepository implements IEntryRepository {
         const totalRed = sumResult.total;
         const netEntropy = Math.max(0, Math.min(100, Math.round(entryRow.gross_entropy - totalRed)));
         this.db
-          .prepare('UPDATE daily_entries SET total_reduction = ?, net_entropy = ?, updated_at = ? WHERE id = ?')
+          .prepare('UPDATE daily_entries SET total_reduction = ?, net_entropy = ?, updated_at = ?, version = version + 1 WHERE id = ?')
           .run(totalRed, netEntropy, new Date().toISOString(), event.entryId);
       }
     });
@@ -285,14 +328,25 @@ export class SqliteEntryRepository implements IEntryRepository {
     return event;
   }
 
-  public async deleteNegentropyEvent(id: string): Promise<boolean> {
+  public async deleteNegentropyEvent(
+    id: string,
+    baseVersion?: number | null
+  ): Promise<{ deleted: boolean; parentEntry: DailyEntry | null }> {
     let changed = false;
+    let parentEntry: DailyEntry | null = null;
     const transaction = this.db.transaction(() => {
       const evt = this.db
         .prepare('SELECT entry_id FROM negentropy_events WHERE id = ?')
         .get(id) as { entry_id: string } | undefined;
 
       if (!evt) return;
+
+      if (baseVersion !== undefined) {
+        const parentRow = this.db
+          .prepare('SELECT * FROM daily_entries WHERE id = ?')
+          .get(evt.entry_id) as DailyEntryRow | undefined;
+        if (parentRow && parentRow.version !== baseVersion) return;
+      }
 
       const del = this.db.prepare('DELETE FROM negentropy_events WHERE id = ?').run(id);
       changed = del.changes > 0;
@@ -303,20 +357,29 @@ export class SqliteEntryRepository implements IEntryRepository {
         .get(evt.entry_id) as { total: number };
 
       const entryRow = this.db
-        .prepare('SELECT gross_entropy FROM daily_entries WHERE id = ?')
-        .get(evt.entry_id) as { gross_entropy: number } | undefined;
+        .prepare('SELECT * FROM daily_entries WHERE id = ?')
+        .get(evt.entry_id) as DailyEntryRow | undefined;
 
       if (entryRow) {
         const totalRed = sumResult.total;
         const netEntropy = Math.max(0, Math.min(100, Math.round(entryRow.gross_entropy - totalRed)));
+        const now = new Date().toISOString();
         this.db
-          .prepare('UPDATE daily_entries SET total_reduction = ?, net_entropy = ?, updated_at = ? WHERE id = ?')
-          .run(totalRed, netEntropy, new Date().toISOString(), evt.entry_id);
+          .prepare('UPDATE daily_entries SET total_reduction = ?, net_entropy = ?, updated_at = ?, version = version + 1 WHERE id = ?')
+          .run(totalRed, netEntropy, now, evt.entry_id);
+        const eventRows = this.db
+          .prepare('SELECT * FROM negentropy_events WHERE entry_id = ? ORDER BY created_at ASC')
+          .all(evt.entry_id) as NegentropyEventRow[];
+        entryRow.total_reduction = totalRed;
+        entryRow.net_entropy = netEntropy;
+        entryRow.updated_at = now;
+        entryRow.version += 1;
+        parentEntry = this.mapRowToEntry(entryRow, eventRows.map((row) => this.mapRowToEvent(row)));
       }
     });
 
     transaction();
-    return changed;
+    return { deleted: changed, parentEntry };
   }
 
   public async getNegentropyLeaderboard(): Promise<NegentropyLeaderboardItem[]> {

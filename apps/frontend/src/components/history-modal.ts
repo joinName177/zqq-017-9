@@ -21,11 +21,27 @@ export function renderHistoryModal(props: HistoryModalProps): string {
     rowsHtml = entries.map((e) => {
       const netColor = e.netEntropy > 75 ? 'var(--entropy-high)' : e.netEntropy < 30 ? 'var(--entropy-low)' : 'var(--entropy-mid)';
       const negEventsCount = e.negentropyEvents ? e.negentropyEvents.length : 0;
-      const negTitles = e.negentropyEvents ? e.negentropyEvents.map((ev) => ev.title).join('; ') : '';
+      const negTitles = e.negentropyEvents ? e.negentropyEvents.map((ev) => {
+        const pending = ev.syncStatus ? ` <span class="event-pending">●${ev.syncStatus === 'conflict' ? '冲突' : '待同步'}</span>` : '';
+        const deleteButton = `
+          <button class="btn btn-danger btn-sm btn-delete-negentropy"
+                  style="padding: 0.05rem 0.35rem; margin-left: .35rem;"
+                  data-event-id="${ev.id}" data-entry-id="${e.id}">删</button>`;
+        return `${ev.title}${pending}${deleteButton}`;
+      }).join('; ') : '';
+      const isPendingDelete = e.syncStatus === 'pending-delete';
+      const syncBadge = e.syncStatus && e.syncStatus !== 'pending-delete'
+        ? `<div class="event-pending">●${e.syncStatus === 'conflict' ? '版本冲突' : e.syncStatus === 'syncing' ? '同步中' : '待同步'}</div>`
+        : isPendingDelete
+          ? `<div class="event-pending">●待删除同步</div>`
+          : '';
 
       return `
-        <tr style="border-bottom: 1px solid var(--border-subtle);">
-          <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono); font-weight: 600;">${e.date}</td>
+        <tr class="${isPendingDelete ? 'row-pending-delete' : ''}" style="border-bottom: 1px solid var(--border-subtle);">
+          <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono); font-weight: 600;">
+            ${e.date}
+            ${syncBadge}
+          </td>
           <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono);">${e.grossEntropy}</td>
           <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono); font-weight: 700; color: ${netColor};">${e.netEntropy}</td>
           <td style="padding: 0.75rem 0.5rem; color: var(--negentropy-color); font-family: var(--font-mono);">

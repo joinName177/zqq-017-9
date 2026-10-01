@@ -44,7 +44,15 @@ $$\text{NetEntropy} = \max\left(0, \text{GrossEntropy} - \sum \Delta S_{\text{ne
 
 ---
 
-## 🏛️ 六边形架构 (Hexagonal Architecture)
+## 📭 离线提交队列与冲突处理
+
+- 仪表盘和最近 100 条历史记录会缓存到 LocalStorage；断网时仍可查看本地数据。
+- 离线提交的每日评估、负熵事件追加、评估删除与负熵事件删除会按发生顺序写入本地提交队列，并在界面上以“待同步 / 同步中 / 版本冲突 / 同步失败”明确标识。
+- 浏览器恢复联网后自动按 FIFO 顺序补交，也可点击“立即同步”。负熵事件携带客户端生成的 `clientEventId`，重试不会重复入账。
+- 每条记录包含递增 `version` 乐观锁。补交前如服务器同一条记录已有更新，API 返回 `409 Conflict` 和服务器版本；前端暂停队列并让用户选择“保留我的本地版本”（携带 `force: true` 覆盖）或“使用服务器版本”（丢弃本地操作），不会静默覆盖。
+- 离线删除会进入删除队列；仅存在于本地、尚未同步成功的新建记录被删除时会直接撤销本地排队操作，不会在联网后复活。
+
+---
 
 严格遵循依赖倒置原则：`adapters → app → core`。
 
@@ -71,7 +79,7 @@ anxiety-entropy/
     ├── nginx.conf                  # Nginx 反向代理、gzip 压缩与 SPA 回退
     └── src/
         ├── core/                   # 业务层 (复用香农熵服务，支持拖拽滑块实时推演)
-        ├── adapters/               # HTTP 客户端 + 离线 LocalStorage 缓存
+        ├── adapters/               # HTTP 客户端 + LocalStorage 离线缓存/提交队列
         ├── app/                    # 响应式状态管理 (DashboardStore) 与交互控制器
         ├── components/             # 100% 手写 SVG 仪表盘、雷达图、河流图与模态框
         ├── styles/                 # 原生 CSS (CSS Variables + Grid + 动效)

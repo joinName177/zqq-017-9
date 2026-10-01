@@ -13,6 +13,7 @@ import {
   EntropyTrendAnalyzer,
   CrisisDetector,
   PaginationQuery,
+  EntryVersionConflictError,
 } from '../../core/index.js';
 
 export class DailyEntryService {
@@ -25,22 +26,49 @@ export class DailyEntryService {
     const calculation = ShannonEntropyCalculator.calculate(input.scores);
     const existingEntry = await this.repository.findByDate(input.date);
 
+    const baseVersion = input.baseVersion;
+
+    if (
+      !input.force &&
+      baseVersion !== undefined &&
+      existingEntry &&
+      existingEntry.version !== baseVersion
+    ) {
+      throw new EntryVersionConflictError(existingEntry);
+    }
+
+    if (
+      !input.force &&
+      baseVersion === null &&
+      existingEntry
+    ) {
+      throw new EntryVersionConflictError(existingEntry);
+    }
+
     const entryId = existingEntry ? existingEntry.id : crypto.randomUUID();
     const now = new Date().toISOString();
 
     let events: NegentropyEvent[] = existingEntry ? [...existingEntry.negentropyEvents] : [];
 
     if (input.negentropyEvent) {
-      const newEvent: NegentropyEvent = {
-        id: crypto.randomUUID(),
-        entryId,
-        title: input.negentropyEvent.title,
-        category: input.negentropyEvent.category as NegentropyEvent['category'],
-        reductionValue: input.negentropyEvent.reductionValue,
-        notes: input.negentropyEvent.notes,
-        createdAt: now,
-      };
-      events.push(newEvent);
+      const clientEventId = input.negentropyEvent.clientEventId;
+      const duplicate = clientEventId
+        ? events.find((event) => event.clientEventId === clientEventId)
+        : undefined;
+
+      if (!duplicate) {
+        const newEvent: NegentropyEvent = {
+          id: crypto.randomUUID(),
+          entryId,
+          title: input.negentropyEvent.title,
+          category: input.negentropyEvent.category as NegentropyEvent['category'],
+          reductionValue: input.negentropyEvent.reductionValue,
+          notes: input.negentropyEvent.notes,
+          createdAt: now,
+          clientEventId: input.negentropyEvent.clientEventId,
+        };
+        events.push(newEvent);
+      }
     }
 
     const totalReduction = NegentropyLedger.calculateTotalReduction(events);
@@ -57,6 +85,7 @@ export class DailyEntryService {
       negentropyEvents: events,
       createdAt: existingEntry ? existingEntry.createdAt : now,
       updatedAt: now,
+      version: existingEntry ? existingEntry.version + 1 : 1,
     };
 
     return this.repository.save(entryToSave);
@@ -139,8 +168,27 @@ export class DailyEntryService {
   /**
    * 按 ID 删除条目
    */
-  public async deleteEntryById(id: string): Promise<boolean> {
-    return this.repository.deleteById(id);
+  public async deleteEntryById(
+    id: string,
+    baseVersion?: number | null,
+    force = false
+  ): Promise<DailyEntry | boolean> {
+    if (baseVersion !== undefined && !force) {
+      const existingEntry = await this.repository.findById(id);
+      if (existingEntry && existingEntry.version !== baseVersion) {
+        throw new EntryVersionConflictError(existingEntry);
+      }
+      if (!existingEntry) {
+        return true;
+      }
+    }
+
+    if (force) {
+      await this.repository.deleteById(id);
+      return true;
+    }
+
+    return this.repository.deleteById(id, baseVersion);
   }
 
   /**
@@ -152,6 +200,22 @@ export class DailyEntryService {
       throw new Error(`找不到对应的评估条目 (ID: ${input.entryId})`);
     }
 
+    if (!input.force) {
+      if (
+        input.baseVersion === null ||
+        (input.baseVersion !== undefined && entry.version !== input.baseVersion)
+      ) {
+        throw new EntryVersionConflictError(entry);
+      }
+
+      if (input.clientEventId) {
+        const duplicate = entry.negentropyEvents.find(
+          (event) => event.clientEventId === input.clientEventId
+        );
+        if (duplicate) return duplicate;
+      }
+    }
+
     const event: NegentropyEvent = {
       id: crypto.randomUUID(),
       entryId: input.entryId,
@@ -160,6 +224,7 @@ export class DailyEntryService {
       reductionValue: input.reductionValue,
       notes: input.notes,
       createdAt: new Date().toISOString(),
+      clientEventId: input.clientEventId,
     };
 
     return this.repository.addNegentropyEvent(event);
@@ -168,8 +233,26 @@ export class DailyEntryService {
   /**
    * 删除负熵事件
    */
-  public async deleteNegentropyEvent(id: string): Promise<boolean> {
-    return this.repository.deleteNegentropyEvent(id);
+  public async deleteNegentropyEvent(
+    id: string,
+    baseVersion?: number | null,
+    force = false
+  ): Promise<{ deleted: boolean; parentEntry: DailyEntry | null }> {
+    if (baseVersion !== undefined && !force) {
+      const parentEntry = await this.repository.findByNegentropyEventId(id);
+      if (!parentEntry) {
+        return { deleted: true, parentEntry: null };
+      }
+      if (parentEntry.version !== baseVersion) {
+        throw new EntryVersionConflictError(parentEntry);
+      }
+    }
+
+    if (force) {
+      return this.repository.deleteNegentropyEvent(id);
+    }
+
+    return this.repository.deleteNegentropyEvent(id, baseVersion);
   }
 
   /**

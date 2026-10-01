@@ -7,6 +7,25 @@ import {
   NegentropyEvent,
 } from '../../core/index.js';
 
+export class HttpClientError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly serverEntry?: DailyEntry
+  ) {
+    super(message);
+    this.name = 'HttpClientError';
+  }
+
+  public get isConflict(): boolean {
+    return this.status === 409;
+  }
+
+  public get isNetworkError(): boolean {
+    return this.status === 0;
+  }
+}
+
 export class HttpClient {
   private baseUrl = '';
 
@@ -17,11 +36,27 @@ export class HttpClient {
       ...options.headers,
     };
 
-    const response = await fetch(url, { ...options, headers });
-    const data = (await response.json()) as ApiResponse<T>;
+    let response: Response;
+    let data: ApiResponse<T>;
+
+    try {
+      response = await fetch(url, { ...options, headers });
+      data = (await response.json()) as ApiResponse<T>;
+    } catch (err) {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        throw new HttpClientError('当前处于离线状态', 0);
+      }
+      const message = err instanceof Error ? err.message : '无法连接服务器';
+      throw new HttpClientError(message, 0);
+    }
 
     if (!response.ok || !data.success) {
-      throw new Error(data.error || `请求失败 (HTTP ${response.status})`);
+      const serverEntry = (data as ApiResponse<DailyEntry>).data;
+      throw new HttpClientError(
+        data.error || `请求失败 (HTTP ${response.status})`,
+        response.status,
+        serverEntry || undefined
+      );
     }
 
     return data.data as T;
@@ -44,8 +79,18 @@ export class HttpClient {
     );
   }
 
-  public async deleteEntry(id: string): Promise<boolean> {
-    await this.request<{ success: boolean }>(`/api/entries/${id}`, {
+  public async deleteEntry(
+    id: string,
+    options: { baseVersion?: number | null; force?: boolean } = {}
+  ): Promise<boolean> {
+    const params = new URLSearchParams();
+    if (options.baseVersion !== undefined) {
+      params.set('baseVersion', options.baseVersion === null ? '' : String(options.baseVersion));
+    }
+    if (options.force) params.set('force', 'true');
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+
+    await this.request<{ success: boolean }>(`/api/entries/${encodeURIComponent(id)}${query}`, {
       method: 'DELETE',
     });
     return true;
@@ -58,11 +103,21 @@ export class HttpClient {
     });
   }
 
-  public async deleteNegentropy(id: string): Promise<boolean> {
-    await this.request<{ success: boolean }>(`/api/negentropy/${id}`, {
-      method: 'DELETE',
-    });
-    return true;
+  public async deleteNegentropy(
+    id: string,
+    options: { baseVersion?: number | null; force?: boolean } = {}
+  ): Promise<DailyEntry | null> {
+    const params = new URLSearchParams();
+    if (options.baseVersion !== undefined) {
+      params.set('baseVersion', options.baseVersion === null ? '' : String(options.baseVersion));
+    }
+    if (options.force) params.set('force', 'true');
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+
+    return this.request<DailyEntry | null>(
+      `/api/negentropy/${encodeURIComponent(id)}${query}`,
+      { method: 'DELETE' }
+    );
   }
 
   public async seedDemo(): Promise<string> {

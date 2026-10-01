@@ -8,12 +8,15 @@ import {
   EntropySourceAttributor,
   NegentropyLedger,
 } from '../../core/index.js';
+import { SyncQueueItem } from '../../adapters/storage/sync-queue-adapter.js';
 
 export interface DashboardState {
   loading: boolean;
   error: string | null;
   isOffline: boolean;
   cachedAt: string | null;
+  syncQueue: SyncQueueItem[];
+  isSyncingQueue: boolean;
   dashboard: DashboardData | null;
   isAssessmentModalOpen: boolean;
   isHistoryModalOpen: boolean;
@@ -53,6 +56,8 @@ export class DashboardStore {
     error: null,
     isOffline: false,
     cachedAt: null,
+    syncQueue: [],
+    isSyncingQueue: false,
     dashboard: null,
     isAssessmentModalOpen: false,
     isHistoryModalOpen: false,
@@ -97,6 +102,10 @@ export class DashboardStore {
   public setState(patch: Partial<DashboardState>): void {
     this.state = { ...this.state, ...patch };
     this.notify();
+  }
+
+  public setSyncQueue(syncQueue: SyncQueueItem[], isSyncingQueue: boolean): void {
+    this.setState({ syncQueue, isSyncingQueue });
   }
 
   /**

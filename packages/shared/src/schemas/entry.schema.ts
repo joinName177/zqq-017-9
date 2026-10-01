@@ -21,7 +21,16 @@ export const createEntrySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式必须为 YYYY-MM-DD'),
   scores: dimensionScoresSchema,
   notes: z.string().max(500, '备注最多500字').optional(),
-  negentropyEvent: createNegentropyEventInlineSchema.optional(),
+  negentropyEvent: createNegentropyEventInlineSchema.extend({
+    clientEventId: z.string().uuid().optional(),
+  }).optional(),
+  /**
+   * 离线队列本次提交所基于的服务器 updatedAt。
+   * null 表示客户端认为服务器当天尚无记录；undefined 表示不做版本检查。
+   */
+  baseVersion: z.number().int().nonnegative().nullable().optional(),
+  /** 已向用户展示冲突并明确选择保留本地版本后，才允许覆盖服务器新版本 */
+  force: z.boolean().optional(),
 });
 
 export const updateEntrySchema = z.object({

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database, { Database as DatabaseType } from 'better-sqlite3';
 import { SqliteEntryRepository } from '../../src/adapters/db/sqlite-entry-repository.js';
 import { DailyEntryService } from '../../src/app/services/daily-entry.service.js';
+import { EntryVersionConflictError } from '../../src/core/index.js';
 
 describe('DailyEntryService Integration with SQLite', () => {
   let db: DatabaseType;
@@ -27,7 +28,8 @@ describe('DailyEntryService Integration with SQLite', () => {
         total_reduction REAL NOT NULL DEFAULT 0,
         notes TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
       );
 
       CREATE TABLE negentropy_events (
@@ -38,6 +40,7 @@ describe('DailyEntryService Integration with SQLite', () => {
         reduction_value REAL NOT NULL,
         notes TEXT,
         created_at TEXT NOT NULL,
+        client_event_id TEXT,
         FOREIGN KEY (entry_id) REFERENCES daily_entries(id) ON DELETE CASCADE
       );
     `);
@@ -144,5 +147,97 @@ describe('DailyEntryService Integration with SQLite', () => {
 
     const fetched = await service.getByDate('2026-03-12');
     expect(fetched).toBeNull();
+  });
+
+  it('should reject an offline save when the server record changed unless force is supplied', async () => {
+    const first = await service.recordDailyEntry({
+      date: '2026-03-13',
+      scores: {
+        physicalTension: 3,
+        rumination: 3,
+        lackOfControl: 3,
+        timePressure: 3,
+        socialAvoidance: 3,
+        futureUncertainty: 3,
+      },
+    });
+
+    const second = await service.recordDailyEntry({
+      date: '2026-03-13',
+      scores: {
+        physicalTension: 6,
+        rumination: 6,
+        lackOfControl: 6,
+        timePressure: 6,
+        socialAvoidance: 6,
+        futureUncertainty: 6,
+      },
+      baseVersion: first.version,
+    });
+
+    await expect(service.recordDailyEntry({
+      date: '2026-03-13',
+      scores: {
+        physicalTension: 1,
+        rumination: 1,
+        lackOfControl: 1,
+        timePressure: 1,
+        socialAvoidance: 1,
+        futureUncertainty: 1,
+      },
+      baseVersion: first.version,
+    })).rejects.toBeInstanceOf(EntryVersionConflictError);
+
+    const forced = await service.recordDailyEntry({
+      date: '2026-03-13',
+      scores: {
+        physicalTension: 1,
+        rumination: 1,
+        lackOfControl: 1,
+        timePressure: 1,
+        socialAvoidance: 1,
+        futureUncertainty: 1,
+      },
+      baseVersion: first.version,
+      force: true,
+    });
+
+    expect(forced.version).toBe(second.version + 1);
+    expect(forced.scores.physicalTension).toBe(1);
+  });
+
+  it('should not duplicate a negentropy event retried with the same clientEventId', async () => {
+    const entry = await service.recordDailyEntry({
+      date: '2026-03-14',
+      scores: {
+        physicalTension: 5,
+        rumination: 5,
+        lackOfControl: 5,
+        timePressure: 5,
+        socialAvoidance: 5,
+        futureUncertainty: 5,
+      },
+    });
+
+    const clientEventId = '11111111-1111-4111-8111-111111111111';
+    const firstEvent = await service.addNegentropyEvent({
+      entryId: entry.id,
+      title: '森林散步',
+      category: 'nature',
+      reductionValue: 12,
+      clientEventId,
+    });
+    const retriedEvent = await service.addNegentropyEvent({
+      entryId: entry.id,
+      title: '森林散步',
+      category: 'nature',
+      reductionValue: 12,
+      clientEventId,
+    });
+
+    expect(retriedEvent.id).toBe(firstEvent.id);
+    const refreshed = await service.getByDate('2026-03-14');
+    expect(refreshed?.negentropyEvents).toHaveLength(1);
+    expect(refreshed?.totalReduction).toBe(12);
   });
 });
